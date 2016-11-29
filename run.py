@@ -14,8 +14,8 @@ DATA_PATH = "Data/"
 DB_URL = "mongodb://url:port"
 HASHTAGS = "entities.hashtags"
 USER_MENTIONS = "entities.user_mentions"
-HASHTAG_LIMIT = 10000
-USER_MENTIONS_LIMIT = 10000
+HASHTAG_LIMIT = 50
+USER_MENTIONS_LIMIT = 50
 
 
 def connect():
@@ -217,10 +217,14 @@ def test_get_language_distribution(client):
     Args:
         client (pymongo.MongoClient): Connection object for Mongo DB_URL.
     """
-    lang_list = get_language_list(client, 'twitter')
-    cursor = get_language_distribution(client, 'twitter', lang_list)
-    for document in cursor:
-        print document
+   lang_list = get_language_list(client, 'twitter')
+   cursor = get_language_distribution(client, 'twitter', lang_list)
+   frequency = []
+   for document in cursor:
+       frequency.append({'language': document['language'],
+                         'value': document['count']})
+   frequency = sorted(frequency, key=lambda k: k['value'], reverse=True)
+   write_json_file('language_distribution', DATA_PATH, frequency)
 
 
 def test_get_language_subset(client):
@@ -278,8 +282,7 @@ def get_top_k_users(client, db_name, lang_list, k_filter, limit):
         {"$unwind": k_filter},
         {"$group": {"_id": {"id_str": k_filter + ".id_str", "screen_name":
                             k_filter + ".screen_name"}, "count": {"$sum": 1}}},
-        {"$sort": SON([("count", -1), ("_id", -1)])},
-        {"$limit": limit},
+        {"$sort": SON([("count", -1), ("_id", -1)])}
     ]
     return dbo.tweets.aggregate(pipeline, allowDiskUse=True)
 
@@ -307,8 +310,7 @@ def get_top_k_hashtags(client, db_name, lang_list, k_filter, limit):
         {"$project": {k_filter_base: 1, "_id": 0}},
         {"$unwind": k_filter},
         {"$group": {"_id": k_filter + ".text", "count": {"$sum": 1}}},
-        {"$sort": SON([("num", -1), ("_id", -1)])},
-        {"$limit": limit},
+        {"$sort": SON([("count", -1), ("_id", -1)])}
     ]
     return dbo.tweets.aggregate(pipeline, allowDiskUse=True)
 
@@ -366,10 +368,13 @@ def sample_map_reduce(client, db_name, subset):
     dbo = client[db_name]
     cursor = dbo[subset].map_reduce(
         map_function, reduce_function, "out:{ inline: 1 }")
+
     for document in cursor.find():
         frequency.append({'_id': document['_id'], 'value': document['value']})
-    pprint(frequency)
 
+    frequency = sorted(frequency, key=lambda k: k['value'], reverse=True)
+    write_json_file('user_distribution_mr', DATA_PATH, frequency)
+    pprint(frequency)
 
 def main():
     """
