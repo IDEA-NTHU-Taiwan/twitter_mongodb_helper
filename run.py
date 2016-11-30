@@ -18,6 +18,37 @@ HASHTAG_LIMIT = 50
 USER_MENTIONS_LIMIT = 50
 
 
+def timing(func):
+    """Decorator for timing run time of a function
+    """
+    def wrap(*args):
+        """Wrapper
+        """
+        time1 = time.time()
+        ret = func(*args)
+        time2 = time.time()
+        print '%s function took %0.3f ms' % (func.func_name, (time2 - time1) * 1000.0)
+        return ret
+    return wrap
+
+
+def do_cprofile(func):
+    """Decorator for profiling a function
+    """
+    def profiled_func(*args, **kwargs):
+        """Wrapper
+        """
+        profile = cProfile.Profile()
+        try:
+            profile.enable()
+            result = func(*args, **kwargs)
+            profile.disable()
+            return result
+        finally:
+            profile.print_stats(sort='time')
+    return profiled_func
+
+
 def connect():
     """Initializes a pymongo conection object.
 
@@ -206,7 +237,8 @@ def get_language_distribution(client, db_name, lang_list):
     pipeline = [
         {"$match": {"lang": {"$in": lang_list}}},
         {"$group": {"_id": "$lang", "count": {"$sum": 1}}},
-        {"$project": {"language": "$_id", "count": 1, "_id": 0}}
+        {"$project": {"language": "$_id", "count": 1, "_id": 0}},
+        {"$sort": SON([("count", -1), ("language", -1)])}
     ]
     return dbo.tweets.aggregate(pipeline)
 
@@ -217,14 +249,9 @@ def test_get_language_distribution(client):
     Args:
         client (pymongo.MongoClient): Connection object for Mongo DB_URL.
     """
-   lang_list = get_language_list(client, 'twitter')
-   cursor = get_language_distribution(client, 'twitter', lang_list)
-   frequency = []
-   for document in cursor:
-       frequency.append({'language': document['language'],
-                         'value': document['count']})
-   frequency = sorted(frequency, key=lambda k: k['value'], reverse=True)
-   write_json_file('language_distribution', DATA_PATH, frequency)
+    lang_list = get_language_list(client, 'twitter')
+    cursor = get_language_distribution(client, 'twitter', lang_list)
+    write_json_file('language_distribution', DATA_PATH, list(cursor))
 
 
 def test_get_language_subset(client):
@@ -282,12 +309,14 @@ def get_top_k_users(client, db_name, lang_list, k_filter, limit):
         {"$unwind": k_filter},
         {"$group": {"_id": {"id_str": k_filter + ".id_str", "screen_name":
                             k_filter + ".screen_name"}, "count": {"$sum": 1}}},
-        {"$sort": SON([("count", -1), ("_id", -1)])}
+        {"$project": {"id_str": "$_id.id_str",
+                      "screen_name": "$_id.screen_name", "count": 1, "_id": 0}},
+        {"$sort": SON([("count", -1), ("id_str", -1)])}
     ]
     return dbo.tweets.aggregate(pipeline, allowDiskUse=True)
 
 
-def get_top_k_hashtags(client, db_name, lang_list, k_filter, limit):
+def get_top_k_hashtags(client, db_name, lang_list, k_filter, limit, k_value):
     """Finds the top k hashtags in the collection.
     k_filter is the name of an array in the collection, we apply the $unwind operator to it
 
@@ -297,6 +326,7 @@ def get_top_k_hashtags(client, db_name, lang_list, k_filter, limit):
         lang_list   (list): List of languages to match on.
         k_filter    (str):  Name of an array in the collection.abs
         limit       (int):  Limit for the number of results to return.
+        k_value     (int):  Filter for the number of occurences for each hashtag
 
     Returns:
         list: List of objects containing _id, hashtag text and the frequency of appearance.
@@ -310,30 +340,31 @@ def get_top_k_hashtags(client, db_name, lang_list, k_filter, limit):
         {"$project": {k_filter_base: 1, "_id": 0}},
         {"$unwind": k_filter},
         {"$group": {"_id": k_filter + ".text", "count": {"$sum": 1}}},
-        {"$sort": SON([("count", -1), ("_id", -1)])}
+        {"$project": {"hashtag": "$_id", "count": 1, "_id": 0}},
+        {"$sort": SON([("count", -1), ("_id", -1)])},
+        {"$match": {"count": {"$gt": k_value}}},
+        {"$limit": limit},
     ]
-    return dbo.tweets.aggregate(pipeline, allowDiskUse=True)
+    return dbo.tweets.aggregate(pipeline)
 
 
+@timing
 def test_get_top_k_users(client, db_name, lang_list, k_filter):
     """Test and print results of top k aggregation
     """
-    frequency = []
     cursor = get_top_k_users(client, db_name, lang_list,
                              k_filter, USER_MENTIONS_LIMIT)
-    for document in cursor:
-        frequency.append({'screen_name': document['_id']['screen_name'],
-                          'value': document['count'], '_id': document['_id']['id_str']})
-    pprint(frequency)
-    write_json_file('user_distribution', DATA_PATH, frequency)
+   # Write directly to json file
+    write_json_file('user_distribution', DATA_PATH, list(cursor))
 
 
-def test_get_top_k_hashtags(client, db_name, lang_list, k_filter):
+@do_cprofile
+def test_get_top_k_hashtags(client, db_name, lang_list, k_filter, k_value):
     """Test and print results of top k aggregation
     """
     frequency = []
     cursor = get_top_k_hashtags(
-        client, db_name, lang_list, k_filter, HASHTAG_LIMIT)
+        client, db_name, lang_list, k_filter, HASHTAG_LIMIT, k_value)
     for document in cursor:
         frequency.append({'hashtag': document['_id'],
                           'value': document['count']})
@@ -341,7 +372,7 @@ def test_get_top_k_hashtags(client, db_name, lang_list, k_filter):
     write_json_file('hashtag_distribution', DATA_PATH, frequency)
 
 
-def sample_map_reduce(client, db_name, subset):
+def user_mentions_map_reduce(client, db_name, subset, output_name):
     """Map reduce that returns the number of times a user is mentioned
 
     Args:
@@ -367,7 +398,7 @@ def sample_map_reduce(client, db_name, subset):
     frequency = []
     dbo = client[db_name]
     cursor = dbo[subset].map_reduce(
-        map_function, reduce_function, "out:{ inline: 1 }")
+        map_function, reduce_function, output_name)
 
     for document in cursor.find():
         frequency.append({'_id': document['_id'], 'value': document['value']})
@@ -376,17 +407,64 @@ def sample_map_reduce(client, db_name, subset):
     write_json_file('user_distribution_mr', DATA_PATH, frequency)
     pprint(frequency)
 
+
+def hashtag_map_reduce(client, db_name, subset, output_name):
+    """Map reduce that returns the number of times a hashtag is used
+
+    Args:
+        client      (pymongo.MongoClient): Connection object for Mongo DB_URL.
+        db_name     (str): Name of database to query.
+        subset      (str): Name of collection to use.
+
+    Returns:
+        list: List of objects containing _id and the frequency of appearance.
+    """
+    map_function = Code("function () {"
+                        "    var hashtags = this.entities.hashtags;"
+                        "    for (var i = 0; i < hashtags.length; i ++){"
+                        "        if (hashtags[i].text.length > 0) {"
+                        "            emit (hashtags[i].text, 1);"
+                        "        }"
+                        "    }"
+                        "}")
+
+    reduce_function = Code("function (keyHashtag, occurs) {"
+                           "     return Array.sum(occurs);"
+                           "}")
+    frequency = []
+    dbo = client[db_name]
+    cursor = dbo[subset].map_reduce(
+        map_function, reduce_function, output_name)
+
+    for document in cursor.find():
+        frequency.append({'_id': document['_id'], 'value': document['value']})
+
+    frequency = sorted(frequency, key=lambda k: k['value'], reverse=True)
+    write_json_file('hashtag_distribution_mr', DATA_PATH, frequency)
+    pprint(frequency)
+
+
+def collection_finder(client, db_name, subset):
+    """Fetches the specified collection
+    """
+    dbo = client[db_name]
+    # cursor = dbo[subset].find({"count":{"$gt":500}})
+    # cursor = dbo[subset].find(
+    #     {}, no_cursor_timeout=True)
+    write_json_file(subset, DATA_PATH, list(
+        dbo[subset].find({}, {"hashtag": 1, "count": 1, "_id": 0})))
+
 def main():
     """
     Test functionality
     """
     client = connect()
-    # sample_map_reduce(client, 'twitter', 'subset_gu')
+    # user_mentions_map_reduce(client, 'twitter', 'subset_gu')
     # test_get_language_distribution(client)
     # test_get_language_subset(client)
     # create_lang_subset(client, 'twitter', 'gu')
-    test_get_top_k_users(client, 'twitter', ['gu'], USER_MENTIONS)
-    test_get_top_k_hashtags(client, 'twitter', ['gu'], HASHTAGS)
-
+    test_get_top_k_users(client, 'twitter', ['ru'], USER_MENTIONS)
+    test_get_top_k_hashtags(client, 'twitter', ['ru'], HASHTAGS, 20)
+    collection_finder(client, 'twitter', 'hashtag_dist_en')
 if __name__ == '__main__':
     main()
