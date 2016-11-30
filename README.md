@@ -50,6 +50,41 @@ db.tweets.createIndex({"entities.user_mentions": 1}, {background:true})
 db.tweets.createIndex({"entities.urls": 1}, {background:true})
 ```
 
-### Fun fact
+### Insights
 
-Aggregation is orders of magnitude faster than map reduce
+- Aggregation is orders of magnitude faster than map reduce
+- Queries that scan the full database may time out when executed at the application level (PyMongo etc). If this happens try running them from Mongo Shell instead
+
+### Aggregation vs MapReduce
+
+Get an aggregate count of all the hashtags in a collection, filtered by english. (uses mongo shell)
+
+```bash
+db.tweets.aggregate([{$match: {'lang': {$in: ['en']}}}, {$project: {'entities.hashtags': 1, _id : 0}}, {$unwind: '$entities.hashtags'}, {$group: {_id: '$entities.hashtags.text', count: {$sum: 1}}}, {$sort: {count: -1}}, {$project: {"hashtag": "$_id", "count": 1, "_id": 0}}, { $out : "hashtag_dist_en" }])
+```
+
+Same query with MapReduce (Pymongo)
+
+```python
+def hashtag_map_reduce(client, db_name, subset, output_name):
+    map_function = Code("function () {"
+                        "    var hashtags = this.entities.hashtags;"
+                        "    for (var i = 0; i < hashtags.length; i ++){"
+                        "        if (hashtags[i].text.length > 0) {"
+                        "            emit (hashtags[i].text, 1);"
+                        "        }"
+                        "    }"
+                        "}")
+
+    reduce_function = Code("function (keyHashtag, occurs) {"
+                           "     return Array.sum(occurs);"
+                           "}")
+    dbo = client[db_name]
+    cursor = dbo[subset].map_reduce(
+        map_function, reduce_function, output_name, query={"lang": {"$eq": 'en'}})
+```
+
+Aggregate user mentions, same structure as the above
+```bash
+db.tweets.aggregate([{$match: {'lang': {$in: ['en']}}}, {$project: {'entities.user_mentions': 1, _id: 0}}, {$unwind: '$entities.user_mentions'}, {$group: {_id: {id_str: '$entities.user_mentions.id_str', 'screen_name': '$entities.user_mentions.screen_name'}, count: {$sum: 1}}}, {$project: {id_str: '$_id.id_str', 'screen_name': '$_id.screen_name', 'count': 1, '_id': 0}}, {$sort: {count: -1}}, { $out : "user_mentions_dist_en" }])
+```
