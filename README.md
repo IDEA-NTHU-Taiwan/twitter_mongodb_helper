@@ -47,6 +47,7 @@ db.tweets.createIndex({"user.id": 1, "user.statuses_count":1, "user.followers_co
 ```bash
 db.tweets.createIndex({timestamp_ms: 1}, {background:true})
 db.tweets.createIndex({"entities.user_mentions": 1}, {background:true})
+db.tweets.createIndex({"lang": 1}, {background:true})
 db.tweets.createIndex({"entities.urls": 1}, {background:true})
 ```
 
