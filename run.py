@@ -1,3 +1,11 @@
+# Author: Jherez Taylor <jherez.taylor@gmail.com>
+# License: MIT
+# Python 2.7
+
+"""
+This module provides methods to query the MongoDB instance
+"""
+
 import os
 import json
 import glob
@@ -7,6 +15,7 @@ import collections
 import pymongo
 from bson.son import SON
 from bson.code import Code
+from bson.objectid import ObjectId
 
 JSON_PATH = ""
 CSV_PATH = ""
@@ -443,16 +452,46 @@ def hashtag_map_reduce(client, db_name, subset, output_name):
     write_json_file('hashtag_distribution_mr', DATA_PATH, frequency)
     pprint(frequency)
 
+def find_by_object_id(client, db_name, subset, object_id):
+    """Fetches the specified object from the specified collection
 
-def collection_finder(client, db_name, subset):
-    """Fetches the specified collection
+    Args:
+        client      (pymongo.MongoClient): Connection object for Mongo DB_URL.
+        db_name     (str): Name of database to query.
+        subset      (str): Name of collection to use.
+        object_id   (str): Object ID to fetch.
     """
     dbo = client[db_name]
-    # cursor = dbo[subset].find({"count":{"$gt":500}})
-    # cursor = dbo[subset].find(
-    #     {}, no_cursor_timeout=True)
-    write_json_file(subset, DATA_PATH, list(
-        dbo[subset].find({}, {"hashtag": 1, "count": 1, "_id": 0})))
+    cursor = dbo[subset].find({"_id": ObjectId(object_id)})
+    pprint(cursor["_id"])
+
+def get_hashtag_collection(client, db_name, subset):
+    """Fetches the specified hashtag collection and writes it to a json file
+
+    Args:
+        client      (pymongo.MongoClient): Connection object for Mongo DB_URL.
+        db_name     (str): Name of database to query.
+        subset      (str): Name of collection to use.
+    """
+    dbo = client[db_name]
+    cursor = dbo[subset].find({"count": {"$gt": 500}}, {
+                              "hashtag": 1, "count": 1, "_id": 0})
+    fileops.write_json_file(subset, constants.DATA_PATH, list(cursor))
+
+def finder(client, db_name, subset, k_items):
+    """Fetches k obects from the specified collection
+
+    Args:
+        client      (pymongo.MongoClient): Connection object for Mongo DB_URL.
+        db_name     (str): Name of database to query.
+        subset      (str): Name of collection to use.
+        k_items     (int): Number of items to retrieve.
+    """
+    dbo = client[db_name]
+    cursor = dbo[subset].find().limit(k_items)
+    for document in cursor:
+        pprint(document)
+        pprint(str(document["_id"]))
 
 def main():
     """
