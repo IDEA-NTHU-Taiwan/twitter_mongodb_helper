@@ -19,7 +19,7 @@ from bson.objectid import ObjectId
 
 JSON_PATH = ""
 CSV_PATH = ""
-DATA_PATH = "Data/"
+DATA_PATH = "data/"
 DB_URL = "mongodb://url:port"
 HASHTAGS = "entities.hashtags"
 USER_MENTIONS = "entities.user_mentions"
